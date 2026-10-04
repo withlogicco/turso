@@ -19,6 +19,7 @@ from .lib import (  # noqa: E402
     Row,
     Warning,
     apilevel,
+    capabilities,
     connect,
     paramstyle,
     setup_logging,
@@ -28,6 +29,7 @@ from .lib import (  # noqa: E402
 )
 
 __all__ = [
+    "capabilities",
     "BatchResult",
     "Connection",
     "Cursor",
