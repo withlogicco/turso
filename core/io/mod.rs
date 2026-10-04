@@ -440,6 +440,21 @@ pub trait IO: Clock + Send + Sync {
         Ok(())
     }
 
+    /// Return a descriptor that becomes ready when native I/O completes.
+    fn completion_fd(&self) -> Option<i64> {
+        None
+    }
+
+    /// Submit queued work and drain ready completions without waiting.
+    fn poll(&self) -> Result<()> {
+        self.step()
+    }
+
+    /// Whether pending work can signal descriptor readiness after polling.
+    fn has_pending_io(&self) -> bool {
+        true
+    }
+
     fn cancel(&self, c: &[Completion]) -> Result<()> {
         c.iter().for_each(|c| c.abort());
         Ok(())

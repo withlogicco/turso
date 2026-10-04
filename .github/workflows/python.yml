@@ -73,6 +73,13 @@ jobs:
         working-directory: ${{ env.working-directory }}
         run: uv sync --all-extras --dev --all-packages
 
+      - name: Run Pytest (native async driver)
+        working-directory: ${{ env.working-directory }}
+        if: runner.os == 'Linux'
+        env:
+          FAKOS_TURSO_VFS: io_uring
+        run: uv run pytest tests/test_native_io_poll.py tests/test_native_phase_c.py tests/test_native_phase_d.py tests/test_native_status.py tests/test_native_yield.py
+
       - name: Run Pytest
         working-directory: ${{ env.working-directory }}
         run: uv run pytest tests/test_database.py

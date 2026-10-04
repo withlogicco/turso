@@ -582,6 +582,10 @@ impl Future for AsyncOpFuture {
                 this.op.take();
                 Poll::Ready(Ok(result))
             }
+            Ok(turso_sdk_kit::rsapi::TursoStatusCode::Yield) => {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
             Ok(turso_sdk_kit::rsapi::TursoStatusCode::Io) => {
                 // Kick IO worker to process queued IO.
                 this.io.kick();
