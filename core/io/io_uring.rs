@@ -19,7 +19,10 @@ use std::{
     collections::{HashMap, VecDeque},
     io::ErrorKind,
     ops::Deref,
-    os::{fd::AsFd, unix::io::AsRawFd},
+    os::{
+        fd::{AsFd, FromRawFd},
+        unix::io::AsRawFd,
+    },
     sync::Arc,
 };
 use tracing::{debug, trace, warn};
@@ -75,6 +78,7 @@ pub struct UringIO {
     /// under `state` and aren't blocked by this lock.
     wait_lock: Arc<Mutex<()>>,
     caps: Arc<UringCapabilities>,
+    event_file: std::fs::File,
 }
 
 unsafe impl Send for UringIO {}
@@ -210,6 +214,16 @@ impl UringIO {
         if !caps.ftruncate {
             warn!("io_uring: IORING_OP_FTRUNCATE not supported by kernel, using POSIX fallback");
         }
+        let event_fd = unsafe { libc::eventfd(0, libc::EFD_NONBLOCK | libc::EFD_CLOEXEC) };
+        if event_fd < 0 {
+            return Err(io_error(std::io::Error::last_os_error(), "eventfd"));
+        }
+        let event_file = unsafe { std::fs::File::from_raw_fd(event_fd) };
+        ring
+            .submitter()
+            .register_eventfd(event_file.as_raw_fd())
+            .map_err(|e| io_error(e, "io_uring_register_eventfd"))?;
+
         let state = RingState {
             overflow: VecDeque::new(),
             pending_ops: 0,
@@ -223,6 +237,7 @@ impl UringIO {
             state: Arc::new(Mutex::new(state)),
             wait_lock: Arc::new(Mutex::new(())),
             caps: Arc::new(caps),
+            event_file,
         })
     }
 }
@@ -499,6 +514,25 @@ impl IO for UringIO {
             unsafe { state.submit_cancel_urgent(&self.ring, &e)? };
         }
         Ok(())
+    }
+
+    fn completion_fd(&self) -> Option<i64> {
+        Some(self.event_file.as_raw_fd() as i64)
+    }
+
+    fn poll(&self) -> Result<()> {
+        // SAFETY: the state mutex keeps submission queue access exclusive.
+        unsafe { self.state.lock().flush_overflow(&self.ring) };
+        self.ring
+            .submitter()
+            .submit()
+            .map_err(|e| io_error(e, "io_uring_submit"))?;
+        self.drain_cq()?;
+        Ok(())
+    }
+
+    fn has_pending_io(&self) -> bool {
+        !self.state.lock().empty()
     }
 
     /// Drive io_uring forward.

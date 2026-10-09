@@ -25,6 +25,7 @@ typedef enum
     TURSO_BUSY = 4,
     TURSO_INTERRUPT = 5,
     TURSO_BUSY_SNAPSHOT = 6,
+    TURSO_YIELD = 7,
     TURSO_ERROR = 127,
     TURSO_MISUSE = 128,
     TURSO_CONSTRAINT = 129,
@@ -419,6 +420,7 @@ turso_status_code_t turso_connection_close(
 /** Execute single statement
  * execute returns TURSO_DONE if execution completed
  * execute returns TURSO_IO if async_io was set and execution needs IO in order to make progress
+ * execute returns TURSO_YIELD if async_io was set and the engine needs another cooperative step
  */
 turso_status_code_t turso_statement_execute(
     const turso_statement_t *self,
@@ -430,6 +432,7 @@ turso_status_code_t turso_statement_execute(
  * Returns TURSO_DONE if execution finished
  * Returns TURSO_ROW if execution generated the row (row values can be inspected with corresponding statement methods)
  * Returns TURSO_IO if async_io was set and statement needs to execute IO to make progress
+ * Returns TURSO_YIELD if async_io was set and the engine needs another cooperative step
  */
 turso_status_code_t turso_statement_step(const turso_statement_t *self, const char **error_opt_out);
 

@@ -82,6 +82,30 @@ async def main():
 asyncio.run(main())
 ```
 
+## Database driver (caller-driven asyncio)
+
+`turso.aio.native` runs statement progress on the caller's asyncio loop without a Python database worker thread. Physical database files require Linux io_uring and a loop that supports file-descriptor readers. The existing `turso.aio` driver remains available.
+
+```python
+import asyncio
+from turso.aio import native
+
+async def main():
+    async with await native.connect("example.db", vfs="io_uring") as conn:
+        await conn.execute("CREATE TABLE IF NOT EXISTS item (value INTEGER)")
+        await conn.execute("BEGIN")
+        await conn.execute("INSERT INTO item VALUES (?)", (7,))
+        await conn.commit()
+        cursor = await conn.execute("SELECT value FROM item")
+        print(await cursor.fetchall())
+
+asyncio.run(main())
+```
+
+The driver provides execute, executemany, fetchone, fetchmany, fetchall, commit, rollback, and close. Use each connection on one event loop and manage transaction ownership in your application. Connection opening still drives I/O synchronously and can block that loop. This driver does not provide remote synchronization or a native SQLAlchemy dialect.
+
+Cancelling an await does not abort the underlying database operation or prove that a write did not commit. Close waits for tracked operations before releasing the connection. The native connection reports `caller_driven_async=True`, `uses_python_worker=False`, and `supports_cancellation=False`.
+
 ## Synchronization driver
 
 Use a remote Turso database while working locally. You can bootstrap local state from the remote, pull remote changes, and push local commits.

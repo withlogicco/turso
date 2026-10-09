@@ -11,9 +11,9 @@ mod _turso {
     // database exports
     #[pymodule_export]
     use crate::turso::{
-        py_turso_database_open, py_turso_setup, PyTursoConnection, PyTursoDatabase,
-        PyTursoDatabaseConfig, PyTursoEncryptionConfig, PyTursoExecutionResult, PyTursoLog,
-        PyTursoSetupConfig, PyTursoStatement, PyTursoStatusCode,
+        py_turso_capabilities, py_turso_database_open, py_turso_setup, PyTursoConnection,
+        PyTursoDatabase, PyTursoDatabaseConfig, PyTursoEncryptionConfig, PyTursoExecutionResult,
+        PyTursoLog, PyTursoSetupConfig, PyTursoStatement, PyTursoStatusCode,
     };
 
     // exception exports
