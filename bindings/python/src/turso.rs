@@ -27,6 +27,7 @@ pub enum PyTursoStatusCode {
     Done = 1,
     Row = 2,
     Io = 3,
+    Yield = 7,
 }
 create_exception!(turso, Busy, PyException, "database is locked");
 create_exception!(
@@ -66,6 +67,7 @@ fn turso_status_to_py(status: TursoStatusCode) -> PyTursoStatusCode {
         TursoStatusCode::Done => PyTursoStatusCode::Done,
         TursoStatusCode::Row => PyTursoStatusCode::Row,
         TursoStatusCode::Io => PyTursoStatusCode::Io,
+        TursoStatusCode::Yield => PyTursoStatusCode::Yield,
     }
 }
 
