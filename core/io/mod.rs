@@ -583,6 +583,21 @@ pub trait IO: Clock + Send + Sync {
         Ok(())
     }
 
+    /// Return a descriptor that becomes ready when native I/O completes.
+    fn completion_fd(&self) -> Option<i64> {
+        None
+    }
+
+    /// Submit queued work and drain ready completions without waiting.
+    fn poll(&self) -> Result<()> {
+        self.step()
+    }
+
+    /// Whether pending work can signal descriptor readiness after polling.
+    fn has_pending_io(&self) -> bool {
+        true
+    }
+
     fn cancel(&self, c: &[Completion]) -> Result<()> {
         c.iter().for_each(|c| c.abort());
         Ok(())
@@ -1121,6 +1136,24 @@ pub fn get_registered_io(name: &str) -> Option<Arc<dyn IO>> {
 /// List all registered Rust IO backend names.
 pub fn list_registered_io() -> Vec<String> {
     IO_REGISTRY.lock().keys().cloned().collect()
+}
+
+#[cfg(test)]
+mod completion_readiness_tests {
+    use super::*;
+
+    #[test]
+    fn backends_without_readiness_support_report_no_completion_fd() {
+        let io = MemoryIO::new();
+        assert_eq!(io.completion_fd(), None);
+    }
+
+    #[test]
+    fn default_poll_steps_and_assumes_work_may_be_pending() {
+        let io = MemoryIO::new();
+        io.poll().unwrap();
+        assert!(io.has_pending_io());
+    }
 }
 
 #[cfg(test)]
