@@ -10,7 +10,7 @@
 //!  (e.g. the itertools library), since Python tends to be slow.
 use pyo3::{
     prelude::*,
-    types::{PyBytes, PyFloat, PyInt, PyMemoryView, PyString, PyTuple},
+    types::{PyBytes, PyDict, PyFloat, PyInt, PyMemoryView, PyString, PyTuple},
 };
 use std::sync::Arc;
 use turso_sdk_kit::rsapi::{self, EncryptionOpts, Numeric, TursoError, TursoStatusCode, Value};
@@ -200,6 +200,15 @@ pub fn py_turso_setup(py: Python, config: &PyTursoSetupConfig) -> PyResult<()> {
     })
     .map_err(turso_error_to_py_err)?;
     Ok(())
+}
+
+#[pyfunction]
+pub fn py_turso_capabilities(py: Python) -> PyResult<Py<PyDict>> {
+    let result = PyDict::new(py);
+    result.set_item("caller_driven_async", true)?;
+    result.set_item("uses_python_worker", false)?;
+    result.set_item("supports_cancellation", false)?;
+    Ok(result.unbind())
 }
 
 /// Open the database
