@@ -29,6 +29,7 @@ from ._turso import (
     PyTursoStatement,
     PyTursoStatusCode,
     Readonly,
+    py_turso_capabilities,
     py_turso_database_open,
     py_turso_setup,
 )
@@ -66,6 +67,11 @@ def _get_sqlite_version() -> tuple[str, tuple[int, int, int]]:
 
 
 sqlite_version, sqlite_version_info = _get_sqlite_version()
+
+
+def capabilities() -> dict[str, bool]:
+    """Return native binding capabilities."""
+    return dict(py_turso_capabilities())
 
 
 # Exception hierarchy following DB-API 2.0
