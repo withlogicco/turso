@@ -431,6 +431,10 @@ impl Statement {
                 Poll::Ready(Ok(Some(Row { values })))
             }
             turso_sdk_kit::rsapi::TursoStatusCode::Done => Poll::Ready(Ok(None)),
+            turso_sdk_kit::rsapi::TursoStatusCode::Yield => {
+                cx.waker().wake_by_ref();
+                Poll::Pending
+            }
             turso_sdk_kit::rsapi::TursoStatusCode::Io => {
                 stmt.run_io()?;
                 if let Some(extra_io) = &self.conn.extra_io {

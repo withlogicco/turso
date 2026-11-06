@@ -631,6 +631,7 @@ pub enum TursoStatusCode {
     Done,
     Row,
     Io,
+    Yield,
 }
 
 #[derive(Debug, Clone)]
@@ -654,6 +655,7 @@ impl TursoStatusCode {
             TursoStatusCode::Done => capi::c::turso_status_code_t::TURSO_DONE,
             TursoStatusCode::Row => capi::c::turso_status_code_t::TURSO_ROW,
             TursoStatusCode::Io => capi::c::turso_status_code_t::TURSO_IO,
+            TursoStatusCode::Yield => capi::c::turso_status_code_t::TURSO_YIELD,
         }
     }
 }
@@ -1073,6 +1075,18 @@ impl TursoDatabase {
         }
     }
 
+    pub fn run_io(&self) -> std::result::Result<(), TursoError> {
+        let io = self
+            .open_state
+            .lock()
+            .unwrap()
+            .io
+            .as_ref()
+            .cloned()
+            .ok_or_else(|| TursoError::Misuse("database open has not started".to_string()))?;
+        io.step().map_err(TursoError::from)
+    }
+
     /// creates database connection
     /// database must be already opened with [Self::open] method
     pub fn connect(&self) -> Result<Arc<TursoConnection>, TursoError> {
@@ -1138,6 +1152,7 @@ struct CachedStatement {
 #[derive(Clone)]
 pub struct TursoConnection {
     async_io: bool,
+    yield_status: Arc<AtomicBool>,
     concurrent_guard: Arc<ConcurrentGuard>,
     connection: Arc<Connection>,
     sync_busy: Option<Arc<SyncBusyGate>>,
@@ -1162,6 +1177,7 @@ impl TursoConnection {
     ) -> Arc<Self> {
         Arc::new(Self {
             async_io: config.async_io,
+            yield_status: Arc::new(AtomicBool::new(false)),
             connection,
             sync_busy,
             concurrent_guard: Arc::new(ConcurrentGuard::new()),
@@ -1173,6 +1189,20 @@ impl TursoConnection {
 
     fn sync_operation_active(&self) -> bool {
         sync_operation_active(self.sync_busy.as_ref(), &self.connection)
+    }
+
+    pub fn set_cooperative_yield(&self, enabled: bool) {
+        self.yield_status.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn completion_fd(&self) -> Option<i64> {
+        self.connection.get_pager().io.completion_fd()
+    }
+
+    pub fn poll_io(&self) -> Result<bool, TursoError> {
+        let pager = self.connection.get_pager();
+        pager.io.poll().map_err(TursoError::from)?;
+        Ok(pager.io.has_pending_io())
     }
 
     fn map_sync_transient_error(&self, error: TursoError) -> TursoError {
@@ -1339,6 +1369,7 @@ impl TursoConnection {
         Ok(Box::new(TursoStatement {
             concurrent_guard: self.concurrent_guard.clone(),
             async_io: self.async_io,
+            yield_status: self.yield_status.load(Ordering::Relaxed),
             sync_busy: self.sync_busy.clone(),
             handle,
             stmt_id,
@@ -1367,6 +1398,7 @@ impl TursoConnection {
                 return Ok(Box::new(TursoStatement {
                     concurrent_guard: self.concurrent_guard.clone(),
                     async_io: self.async_io,
+                    yield_status: self.yield_status.load(Ordering::Relaxed),
                     sync_busy: self.sync_busy.clone(),
                     handle,
                     stmt_id,
@@ -1397,6 +1429,7 @@ impl TursoConnection {
         Ok(Box::new(TursoStatement {
             concurrent_guard: self.concurrent_guard.clone(),
             async_io: self.async_io,
+            yield_status: self.yield_status.load(Ordering::Relaxed),
             sync_busy: self.sync_busy.clone(),
             handle,
             stmt_id,
@@ -1425,6 +1458,7 @@ impl TursoConnection {
                 Ok(Some((
                     Box::new(TursoStatement {
                         async_io: self.async_io,
+                        yield_status: self.yield_status.load(Ordering::Relaxed),
                         concurrent_guard: Arc::new(ConcurrentGuard::new()),
                         sync_busy: self.sync_busy.clone(),
                         handle,
@@ -1523,6 +1557,7 @@ const FINALIZED_ERR: &str = "statement has been finalized";
 fn step_inner(
     stmt: &mut Statement,
     async_io: bool,
+    yield_status: bool,
     waker: Option<&Waker>,
 ) -> Result<TursoStatusCode, TursoError> {
     loop {
@@ -1532,6 +1567,7 @@ fn step_inner(
             stmt.step()
         };
         return match result? {
+            StepResult::Yield if async_io && yield_status => Ok(TursoStatusCode::Yield),
             StepResult::Done => Ok(TursoStatusCode::Done),
             StepResult::Row => Ok(TursoStatusCode::Row),
             StepResult::Busy => Err(TursoError::Busy("database is locked".to_string())),
@@ -1550,6 +1586,7 @@ fn step_inner(
 
 pub struct TursoStatement {
     async_io: bool,
+    yield_status: bool,
     concurrent_guard: Arc<ConcurrentGuard>,
     sync_busy: Option<Arc<SyncBusyGate>>,
     pub(crate) handle: StatementHandle,
@@ -1651,6 +1688,7 @@ impl TursoStatement {
     /// method returns [TursoStatusCode::Done] if execution is finished
     /// method returns [TursoStatusCode::Row] if execution generated a row
     /// method returns [TursoStatusCode::Io] if async_io was set and execution needs IO in order to make progress
+    /// method returns [TursoStatusCode::Yield] if async_io was set and the engine needs another cooperative step
     #[inline]
     pub fn step(&mut self, waker: Option<&Waker>) -> Result<TursoStatusCode, TursoError> {
         let guard = self.concurrent_guard.clone();
@@ -1662,13 +1700,14 @@ impl TursoStatement {
         if sync_operation_active(self.sync_busy.as_ref(), &stmt.get_program().connection) {
             return Err(sync_busy_error());
         }
-        step_inner(stmt, self.async_io, waker)
+        step_inner(stmt, self.async_io, self.yield_status, waker)
             .map_err(|error| map_sync_transient_error(self.sync_busy.as_ref(), error))
     }
 
     /// execute statement to completion
     /// method returns [TursoStatusCode::Done] if execution completed
     /// method returns [TursoStatusCode::Io] if async_io was set and execution needs IO in order to make progress
+    /// method returns [TursoStatusCode::Yield] if async_io was set and the engine needs another cooperative step
     pub fn execute(&mut self, waker: Option<&Waker>) -> Result<TursoExecutionResult, TursoError> {
         let guard = self.concurrent_guard.clone();
         let _guard = guard.try_use()?;
@@ -1681,11 +1720,11 @@ impl TursoStatement {
         }
 
         loop {
-            let status = step_inner(stmt, self.async_io, waker)
+            let status = step_inner(stmt, self.async_io, self.yield_status, waker)
                 .map_err(|error| map_sync_transient_error(self.sync_busy.as_ref(), error))?;
             if status == TursoStatusCode::Row {
                 continue;
-            } else if status == TursoStatusCode::Io {
+            } else if matches!(status, TursoStatusCode::Io | TursoStatusCode::Yield) {
                 return Ok(TursoExecutionResult {
                     status,
                     rows_changed: 0,
@@ -1800,8 +1839,8 @@ impl TursoStatement {
             // that stopped earlier, for example on Busy, must not run further: dropping it
             // below rolls it back, as `sqlite3_finalize` would.
             while stmt.has_returned_row() && stmt.execution_state().is_running() {
-                let status = step_inner(stmt, self.async_io, waker)?;
-                if status == TursoStatusCode::Io {
+                let status = step_inner(stmt, self.async_io, self.yield_status, waker)?;
+                if matches!(status, TursoStatusCode::Io | TursoStatusCode::Yield) {
                     return Ok(status);
                 }
             }
@@ -2059,6 +2098,51 @@ mod tests {
             self.transform(page, output);
             Ok(())
         }
+    }
+
+    fn open_in_memory(async_io: bool) -> Arc<TursoDatabase> {
+        let mut config = config_with_features(None);
+        config.async_io = async_io;
+        let db = TursoDatabase::new(config);
+        assert!(!db.open().unwrap().is_io());
+        db
+    }
+
+    #[test]
+    fn cooperative_yield_opt_in_does_not_change_simple_queries() {
+        for opted_in in [false, true] {
+            let db = open_in_memory(true);
+            let conn = db.connect().unwrap();
+            conn.set_cooperative_yield(opted_in);
+            let mut stmt = conn.prepare_single("SELECT 1").unwrap();
+            let mut statuses = Vec::new();
+            loop {
+                let status = stmt.step(None).unwrap();
+                statuses.push(status);
+                match status {
+                    TursoStatusCode::Done => break,
+                    TursoStatusCode::Io => stmt.run_io().unwrap(),
+                    TursoStatusCode::Row | TursoStatusCode::Yield => {}
+                }
+            }
+            assert!(statuses.contains(&TursoStatusCode::Row), "{statuses:?}");
+        }
+    }
+
+    #[test]
+    fn memory_connection_has_no_completion_fd_and_polls_cleanly() {
+        let db = open_in_memory(true);
+        let conn = db.connect().unwrap();
+        assert_eq!(conn.completion_fd(), None);
+        // Nothing is queued, so poll succeeds. Default backends always report
+        // possible pending work.
+        assert!(conn.poll_io().unwrap());
+    }
+
+    #[test]
+    fn database_run_io_before_open_is_misuse() {
+        let db = TursoDatabase::new(config_with_features(None));
+        assert!(matches!(db.run_io(), Err(TursoError::Misuse(_))));
     }
 
     #[test]
